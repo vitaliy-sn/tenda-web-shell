@@ -71,12 +71,12 @@ func (s *Sender) Status() string {
 	return s.status
 }
 
-// Target returns the currently configured device address as "host:port"
-// (using the command port, which is what the UI displays).
+// Target returns the currently configured device IP. Ports are fixed by
+// protocol constants and are not shown in the UI.
 func (s *Sender) Target() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return fmt.Sprintf("%s:%d", s.device, s.commandPort)
+	return s.device
 }
 
 func (s *Sender) setStatus(st string) {
