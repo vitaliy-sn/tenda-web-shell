@@ -2,9 +2,7 @@ package main
 
 import (
 	"log"
-	"net"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -94,9 +92,6 @@ func handleWS(term *Terminal, sender *Sender, h *hub) http.HandlerFunc {
 		}
 		c.send(wsMessage{Type: "target", Data: sender.Target()})
 		c.send(wsMessage{Type: "status", Data: sender.Status()})
-		if len(hist) == 0 {
-			c.send(wsMessage{Type: "prompt"})
-		}
 
 		// Reader goroutine: commands from the browser.
 		done := make(chan struct{})
@@ -117,10 +112,8 @@ func handleWS(term *Terminal, sender *Sender, h *hub) http.HandlerFunc {
 					if cmd == "" {
 						continue
 					}
-					// Move to a fresh line so command output starts below the
-					// typed command, then re-show the prompt for the next input.
-					term.Append("\r\n")
-					term.Append("$ ")
+					// The browser echoes the command into its output pane; we
+					// just dispatch it to the device and report status.
 					if err := sender.Send(cmd); err != nil {
 						term.Append("[send error: " + err.Error() + "]")
 					}
@@ -139,18 +132,13 @@ func handleWS(term *Terminal, sender *Sender, h *hub) http.HandlerFunc {
 					term.Clear()
 					h.broadcast(wsMessage{Type: "clear"})
 				case "settarget":
-					// data is "host:port"
-					host, portStr, err := net.SplitHostPort(msg.Data)
-					if err != nil {
+					// data is the device IP (ports are fixed by protocol constants).
+					host := strings.TrimSpace(msg.Data)
+					if host == "" {
 						term.Append("[bad target: "+msg.Data+"]")
 						continue
 					}
-					port, err := strconv.Atoi(portStr)
-					if err != nil || port <= 0 {
-						term.Append("[bad port in target: "+msg.Data+"]")
-						continue
-					}
-					sender.SetTarget(host, port)
+					sender.SetTarget(host)
 					h.broadcast(wsMessage{Type: "status", Data: sender.Status()})
 				}
 			}

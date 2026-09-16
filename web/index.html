@@ -4,7 +4,6 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Tenda Web Shell</title>
-<link rel="stylesheet" href="/xterm.css">
 <style>
   html, body { margin:0; padding:0; height:100%; background:#111; overflow:hidden; }
   #bar {
@@ -34,14 +33,14 @@
   }
   #clearbtn:hover { background:#4d3535; }
 
-  /* Full-viewport layer below the toolbar; centers the terminal window. */
+  /* Full-viewport layer below the toolbar; centers the shell window. */
   #termwrap {
     position:absolute; top:34px; left:0; right:0; bottom:0;
     display:flex; align-items:center; justify-content:center;
   }
 
-  /* The draggable/resizable "window" around xterm. Starts centered via the
-     flex above; after the first drag/resize it switches to position:absolute
+  /* The draggable/resizable "window" around the two panes. Starts centered via
+     the flex above; after the first drag/resize it switches to position:absolute
      with explicit left/top so it no longer fights the flex centering. */
   #termwin {
     width:900px; height:520px; min-width:340px; min-height:170px;
@@ -60,8 +59,28 @@
   }
   #termtitle .grip { margin-right:8px; color:#555; letter-spacing:1px; }
 
-  /* xterm fills the window below the title bar. */
-  #term { flex:1 1 auto; min-height:0; padding:4px 6px; }
+  /* Output pane: scrollable, fills the space above the input row. */
+  #output {
+    flex:1 1 auto; min-height:0; overflow-y:auto;
+    padding:6px 10px; box-sizing:border-box;
+    font:14px/1.5 Menlo, Consolas, 'DejaVu Sans Mono', monospace;
+    color:#ddd; white-space:pre-wrap; word-break:break-all;
+  }
+  #output .cmd-line { color:#2ecc71; }
+  #output .out-line { color:#ddd; }
+
+  /* Input row: fixed prompt label + text input, always at the bottom. */
+  #inputrow {
+    flex:0 0 auto; display:flex; align-items:center; gap:6px;
+    padding:6px 10px; box-sizing:border-box;
+    background:#1a1a1a; border-top:1px solid #333;
+  }
+  #inputrow .prompt { color:#2ecc71; font:14px/1.5 Menlo, Consolas, 'DejaVu Sans Mono', monospace; user-select:none; }
+  #cmd {
+    flex:1 1 auto; min-width:0; background:transparent; border:none; outline:none;
+    color:#fff; font:14px/1.5 Menlo, Consolas, 'DejaVu Sans Mono', monospace;
+    caret-color:#2ecc71;
+  }
 
   /* Bottom-right resize grip. */
   #resizehandle {
@@ -79,7 +98,7 @@
 <div id="bar">
   <span class="title">tenda-web-shell</span>
   <span id="dot"></span>
-  <span id="status">connecting…</span>
+  <span id="status">connecting&hellip;</span>
   <input id="target" type="text" placeholder="device:port (e.g. 10.4.1.180:7329)" spellcheck="false">
   <button id="connbtn">Connect</button>
   <button id="clearbtn" title="Clear terminal history">Clear</button>
@@ -87,12 +106,15 @@
 <div id="termwrap">
   <div id="termwin">
     <div id="termtitle"><span class="grip">&#9635;</span>tenda-web-shell</div>
-    <div id="term"></div>
+    <div id="output"></div>
+    <div id="inputrow">
+      <span class="prompt">$</span>
+      <input id="cmd" type="text" spellcheck="false" autocomplete="off" autofocus>
+    </div>
     <div id="resizehandle"></div>
   </div>
 </div>
 
-<script src="/xterm.js"></script>
 <script>
 (function () {
   "use strict";
@@ -101,15 +123,8 @@
   var win = document.getElementById("termwin");
   var titleBar = document.getElementById("termtitle");
   var resizeHandle = document.getElementById("resizehandle");
-
-  var term = new Terminal({
-    cursorBlink: true,
-    convertEol: false,
-    fontSize: 14,
-    fontFamily: "Menlo, Consolas, 'DejaVu Sans Mono', monospace",
-    theme: { background: "#111", foreground: "#ddd", cursor: "#2ecc71" }
-  });
-  term.open(document.getElementById("term"));
+  var output = document.getElementById("output");
+  var cmdInput = document.getElementById("cmd");
 
   var dot = document.getElementById("dot");
   var statusEl = document.getElementById("status");
@@ -123,7 +138,7 @@
       dot.classList.add("on"); statusEl.textContent = "connected";
       connBtn.textContent = "Disconnect"; connBtn.classList.add("connected");
     } else if (s === "connecting") {
-      dot.classList.remove("on"); statusEl.textContent = "connecting…";
+      dot.classList.remove("on"); statusEl.textContent = "connecting\u2026";
       connBtn.textContent = "Connect"; connBtn.classList.remove("connected");
     } else {
       dot.classList.remove("on"); statusEl.textContent = "disconnected";
@@ -157,97 +172,37 @@
     sendMsg({ type: "clear" });
   });
 
-  function wsURL() {
-    var proto = location.protocol === "https:" ? "wss" : "ws";
-    return proto + "://" + location.host + "/ws";
+  // ---- Output pane helpers ----------------------------------------------
+  // Keep the output scrolled to the bottom only if the user is already there,
+  // so reading history isn't yanked around by new device output.
+  function nearBottom() {
+    return output.scrollHeight - output.scrollTop - output.clientHeight < 40;
   }
 
-  // ---- Line input -------------------------------------------------------
-  // xterm.js 5.x: onData delivers printable characters from the keypress
-  // event, but Enter / Backspace / Ctrl-C never reach it. So we intercept
-  // those keys with attachCustomKeyEventHandler (real DOM keydown) and let
-  // every other key fall through to xterm's default handling, which then
-  // emits the printable char via onData. We render our own echo so the typed
-  // line is always visible; the server adds "\r\n" + "$ " after each command.
-  var inputLine = "";
-
-  function renderLine() {
-    term.write("\r\x1b[K" + inputLine); // carriage return, clear line, re-echo
-    term.scrollToBottom();
+  function appendLine(text, cls) {
+    var wasNear = nearBottom();
+    var div = document.createElement("div");
+    div.className = cls || "out-line";
+    div.textContent = text;
+    output.appendChild(div);
+    if (wasNear) output.scrollTop = output.scrollHeight;
   }
 
-  function sendCmd() {
-    var cmd = inputLine;
-    inputLine = "";
-    if (cmd) sendMsg({ type: "cmd", data: cmd });
+  function appendCmd(cmd) {
+    appendLine("$ " + cmd, "cmd-line");
   }
 
-  term.onData(function (data) {
-    for (var i = 0; i < data.length; i++) {
-      var ch = data[i];
-      if (ch >= " ") inputLine += ch;
-    }
-    renderLine();
+  // ---- Command input -----------------------------------------------------
+  // Native <input> handles all editing (backspace, arrows, selection, paste).
+  // On Enter: echo the command into the output pane, clear the field, send it.
+  cmdInput.addEventListener("keydown", function (e) {
+    if (e.key !== "Enter") return;
+    var cmd = cmdInput.value;
+    cmdInput.value = "";
+    if (cmd === "") return;
+    appendCmd(cmd);
+    sendMsg({ type: "cmd", data: cmd });
   });
-
-  term.attachCustomKeyEventHandler(function (ev) {
-    if (ev.type !== "keydown") return undefined; // let keyup/keypress pass through
-    switch (ev.key) {
-      case "Enter":
-        sendCmd();
-        return false; // stop xterm from emitting \r into onData
-      case "Backspace":
-        if (inputLine.length > 0) {
-          inputLine = inputLine.slice(0, -1);
-          renderLine();
-        }
-        return false; // stop xterm from emitting \x7f
-      default:
-        break;
-    }
-    if (ev.ctrlKey && (ev.key === "c" || ev.key === "C")) {
-      inputLine = "";
-      renderLine();
-      return false;
-    }
-    return undefined; // default handling -> onData for printable chars
-  });
-
-  // ---- Fit xterm to the window -----------------------------------------
-  // No external addon: measure the #term box and the font cell, then call
-  // term.resize(cols, rows). Works on any xterm 5.x.
-  var charMeasure = null;
-  function measureChar() {
-    if (charMeasure) return charMeasure;
-    var canvas = document.createElement("canvas");
-    var ctx = canvas.getContext("2d");
-    ctx.font = term._core ? "14px Menlo, Consolas, monospace" : "14px monospace";
-    // Use xterm's own measurement when available for accuracy.
-    var core = term._core;
-    if (core && core._charSizeService) {
-      try {
-        var cs = core._charSizeService.getCharSize();
-        if (cs && cs.width > 0) { charMeasure = cs; return cs; }
-      } catch (e) {}
-    }
-    var m = ctx.measureText("W");
-    charMeasure = { width: Math.max(1, m.width), height: 14 };
-    return charMeasure;
-  }
-
-  function fit() {
-    var box = document.getElementById("term").getBoundingClientRect();
-    if (box.width < 20 || box.height < 20) return;
-    var cs = measureChar();
-    // Account for #term padding (4px top/bottom, 6px left/right).
-    var availW = box.width - 12;
-    var availH = box.height - 8;
-    var cols = Math.max(2, Math.floor(availW / cs.width));
-    var rows = Math.max(1, Math.floor(availH / (cs.height || 14)));
-    if (cols !== term.cols || rows !== term.rows) {
-      term.resize(cols, rows);
-    }
-  }
 
   // ---- Window drag + resize --------------------------------------------
   function centerWindow() {
@@ -299,12 +254,10 @@
       var h = Math.max(170, startH + (ev.clientY - startY));
       win.style.width = w + "px";
       win.style.height = h + "px";
-      fit();
     }
     function onUp() {
       document.removeEventListener("mousemove", onMove);
       document.removeEventListener("mouseup", onUp);
-      fit();
     }
     document.addEventListener("mousemove", onMove);
     document.addEventListener("mouseup", onUp);
@@ -312,9 +265,6 @@
 
   titleBar.addEventListener("mousedown", startDrag);
   resizeHandle.addEventListener("mousedown", startResize);
-
-  // Keep xterm fitted when the browser window resizes.
-  window.addEventListener("resize", fit);
 
   // ---- WebSocket --------------------------------------------------------
   var ws;
@@ -326,12 +276,7 @@
       try { m = JSON.parse(ev.data); } catch (e) { return; }
       switch (m.type) {
         case "out":
-          term.write(m.data + "\r\n");
-          term.scrollToBottom();
-          break;
-        case "prompt":
-          term.write("\r\n$ ");
-          term.scrollToBottom();
+          appendLine(m.data, "out-line");
           break;
         case "status":
           setStatus(m.data);
@@ -341,10 +286,8 @@
           lastTarget = m.data;
           break;
         case "clear":
-          term.clear();
-          inputLine = "";
-          term.write("$ ");
-          term.scrollToBottom();
+          output.innerHTML = "";
+          cmdInput.value = "";
           break;
       }
     };
@@ -355,9 +298,14 @@
     ws.onerror = function () { try { ws.close(); } catch (e) {} };
   }
 
-  // Initial layout: center the window, then fit xterm to it.
+  function wsURL() {
+    var proto = location.protocol === "https:" ? "wss" : "ws";
+    return proto + "://" + location.host + "/ws";
+  }
+
+  // Initial layout: center the window, focus the input.
   centerWindow();
-  fit();
+  cmdInput.focus();
   connect();
 })();
 </script>

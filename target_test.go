@@ -4,6 +4,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -38,8 +39,21 @@ func TestSetTargetAndConnect(t *testing.T) {
 	fakeAddr, cleanup := newFakeDevice(t)
 	defer cleanup()
 
+	fakeHost, fakePortStr, err := net.SplitHostPort(fakeAddr)
+	if err != nil {
+		t.Fatalf("split fake addr: %v", err)
+	}
+	fakePort, err := strconv.Atoi(fakePortStr)
+	if err != nil {
+		t.Fatalf("atoi fake port: %v", err)
+	}
+
 	term := NewTerminal()
-	sender := NewSender("127.0.0.1", 1, "127.0.0.1:9")
+	sender := NewSender(fakeHost, "127.0.0.1:9")
+	// The fake device listens on a single port; point both the wake and command
+	// phases at it so the two-phase connect sequence succeeds.
+	sender.SetWakePort(fakePort)
+	sender.SetCommandPort(fakePort)
 	h := newHub()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", handleWS(term, sender, h))
@@ -69,10 +83,10 @@ func TestSetTargetAndConnect(t *testing.T) {
 	// Initial target + status.
 	read("target")
 	read("status")
-	read("prompt") // empty history -> initial prompt
 
-	// Repoint at the fake device -> status drops to disconnected.
-	if err := conn.WriteJSON(wsMessage{Type: "settarget", Data: fakeAddr}); err != nil {
+	// Repoint at the fake device -> status drops to disconnected. The target is
+	// IP-only now (ports are fixed by protocol constants), so send just the host.
+	if err := conn.WriteJSON(wsMessage{Type: "settarget", Data: fakeHost}); err != nil {
 		t.Fatalf("write settarget: %v", err)
 	}
 	st := read("status")

@@ -12,7 +12,7 @@ import (
 
 func TestWSBridge(t *testing.T) {
 	term := NewTerminal()
-	sender := NewSender("127.0.0.1", 1, "127.0.0.1:1") // UDP target has no listener; send will fail -> status disconnected
+	sender := NewSender("127.0.0.1", "127.0.0.1:1") // UDP target has no listener; send will fail -> status disconnected
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", handleWS(term, sender, newHub()))
@@ -40,23 +40,15 @@ func TestWSBridge(t *testing.T) {
 		return m
 	}
 
-	// Initial target, status, and prompt (empty history) messages.
+	// Initial target and status messages.
 	readMsg(t, "target")
 	readMsg(t, "status")
-	readMsg(t, "prompt")
 
-	// Send a command; the server emits a newline then a fresh prompt before
-	// the status update so output starts on a new line.
+	// Send a command; the server no longer injects a newline/prompt into the
+	// terminal buffer (the browser echoes the command itself), so only the
+	// status update follows.
 	if err := conn.WriteJSON(wsMessage{Type: "cmd", Data: "ls -l /etc"}); err != nil {
 		t.Fatalf("write cmd: %v", err)
-	}
-	nl := readMsg(t, "out")
-	if nl.Data != "\r\n" {
-		t.Fatalf("want newline got %q", nl.Data)
-	}
-	prompt := readMsg(t, "out")
-	if prompt.Data != "$ " {
-		t.Fatalf("want prompt got %q", prompt.Data)
 	}
 	readMsg(t, "status")
 

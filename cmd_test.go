@@ -80,7 +80,11 @@ func TestConnectCommandAndResponse(t *testing.T) {
 
 	term := NewTerminal()
 	hub := newHub()
-	sender := NewSender(fakeHost, fakePort, "placeholder") // advertise set below
+	sender := NewSender(fakeHost, "placeholder") // advertise set below
+	// The fake device listens on a single port; point both the wake and command
+	// phases at it so the two-phase connect sequence succeeds.
+	sender.SetWakePort(fakePort)
+	sender.SetCommandPort(fakePort)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -133,10 +137,9 @@ func TestConnectCommandAndResponse(t *testing.T) {
 		return m
 	}
 
-	// Initial target + status + prompt (empty history).
+	// Initial target + status.
 	read("target")
 	read("status")
-	read("prompt")
 
 	// Connect: probe succeeds against the fake device.
 	if err := conn.WriteJSON(wsMessage{Type: "connect"}); err != nil {
@@ -148,18 +151,13 @@ func TestConnectCommandAndResponse(t *testing.T) {
 	}
 	t.Logf("connected to device (probe OK)")
 
-	// Send the command. The server emits a newline + fresh prompt before the
-	// status update, then the device's callback POST delivers the output.
+	// Send the command. The server no longer injects a newline/prompt into the
+	// terminal buffer (the browser echoes the command itself); only the status
+	// update follows, then the device's callback POST delivers the output.
 	if err := conn.WriteJSON(wsMessage{Type: "cmd", Data: "ls /etc/passwd"}); err != nil {
 		t.Fatalf("write cmd: %v", err)
 	}
 	t.Logf("WS -> cmd \"ls /etc/passwd\"")
-	if nl := read("out"); nl.Data != "\r\n" {
-		t.Fatalf("want newline got %q", nl.Data)
-	}
-	if p := read("out"); p.Data != "$ " {
-		t.Fatalf("want prompt got %q", p.Data)
-	}
 	read("status")
 
 	// The fake device POSTs the command output back; the server appends it to

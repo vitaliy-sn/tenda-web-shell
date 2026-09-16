@@ -18,7 +18,7 @@ import (
 // All writes are serialized by client.mu, so this must not panic.
 func TestConcurrentWrites(t *testing.T) {
 	term := NewTerminal()
-	sender := NewSender("127.0.0.1", 1, "127.0.0.1:9")
+	sender := NewSender("127.0.0.1", "127.0.0.1:9")
 	h := newHub()
 
 	mux := http.NewServeMux()

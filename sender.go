@@ -11,27 +11,57 @@ import (
 	"time"
 )
 
+// Device UDP ports. The wake port must be probed first to bring the device up;
+// only then does the command port accept PTEfuseSet payloads.
+const (
+	wakePort    = 7320 // probe to wake the device before the command channel
+	commandPort = 7329 // PTEfuseSet / wget-callback command channel
+)
+
 // Sender holds a single persistent UDP connection to the target device and
 // wraps shell commands into the PTEfuseSet JSON payload. Every request sent
 // and every response received is logged.
 type Sender struct {
-	mu        sync.Mutex
-	conn      *net.UDPConn
-	addr      *net.UDPAddr
-	device    string
-	port      int
-	advertise string // host:port the device can reach (for the wget callback)
-	status    string // "disconnected" | "connecting" | "connected"
-	readerDone chan struct{}
+	mu           sync.Mutex
+	conn         *net.UDPConn
+	addr         *net.UDPAddr
+	device       string
+	wakePort     int
+	commandPort  int
+	advertise    string // host:port the device can reach (for the wget callback)
+	status       string // "disconnected" | "connecting" | "connected"
+	readerDone   chan struct{}
 }
 
-func NewSender(device string, port int, advertise string) *Sender {
+// NewSender creates a Sender for the given device IP. Ports are fixed by the
+// protocol constants (wakePort, commandPort); only the IP is configurable.
+func NewSender(device string, advertise string) *Sender {
 	return &Sender{
-		device:    device,
-		port:      port,
-		advertise: advertise,
-		status:    "disconnected",
+		device:      device,
+		wakePort:    wakePort,
+		commandPort: commandPort,
+		advertise:   advertise,
+		status:      "disconnected",
 	}
+}
+
+// SetWakePort overrides the wake port (test helper).
+func (s *Sender) SetWakePort(p int) {
+	s.mu.Lock()
+	s.wakePort = p
+	s.mu.Unlock()
+}
+
+// SetCommandPort overrides the command port (test helper).
+func (s *Sender) SetCommandPort(p int) {
+	s.mu.Lock()
+	s.commandPort = p
+	if s.conn != nil {
+		s.conn.Close()
+		s.conn = nil
+	}
+	s.status = "disconnected"
+	s.mu.Unlock()
 }
 
 // Status returns the current connection status.
@@ -41,11 +71,12 @@ func (s *Sender) Status() string {
 	return s.status
 }
 
-// Target returns the currently configured device address as "host:port".
+// Target returns the currently configured device address as "host:port"
+// (using the command port, which is what the UI displays).
 func (s *Sender) Target() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return fmt.Sprintf("%s:%d", s.device, s.port)
+	return fmt.Sprintf("%s:%d", s.device, s.commandPort)
 }
 
 func (s *Sender) setStatus(st string) {
@@ -54,13 +85,13 @@ func (s *Sender) setStatus(st string) {
 	s.mu.Unlock()
 }
 
-// SetTarget changes the device address/port and tears down any existing
-// connection so the next command reconnects to the new target.
-func (s *Sender) SetTarget(device string, port int) {
+// SetTarget changes the device IP and tears down any existing connection so
+// the next command reconnects to the new target. Ports are fixed by protocol
+// constants and are not changed here.
+func (s *Sender) SetTarget(device string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.device = device
-	s.port = port
 	if s.conn != nil {
 		s.conn.Close()
 		s.conn = nil
@@ -79,10 +110,54 @@ func (s *Sender) Disconnect() {
 	s.status = "disconnected"
 }
 
-// Connect probes the device by sending "123" on a short-lived socket and
-// waiting for a reply that contains "format failed". On success it opens the
-// persistent command connection. Using a separate probe socket avoids racing
-// the background reader goroutine over the shared command socket.
+// probePort sends payload to device:port on a short-lived socket and waits up
+// to timeout for any reply. It returns true if at least one datagram was
+// received (content is logged but not matched). A separate socket avoids
+// racing the background reader goroutine over the shared command socket.
+func (s *Sender) probePort(port int, payload []byte, timeout time.Duration) bool {
+	addr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", s.device, port))
+	if err != nil {
+		log.Printf("probe %s:%d: resolve: %v", s.device, port, err)
+		return false
+	}
+	conn, err := net.DialUDP("udp", nil, addr)
+	if err != nil {
+		log.Printf("probe %s:%d: open udp: %v", s.device, port, err)
+		return false
+	}
+	defer conn.Close()
+
+	log.Printf("udp  -> %s:%d  %q", s.device, port, string(payload))
+	if _, err := conn.Write(payload); err != nil {
+		log.Printf("probe %s:%d: write: %v", s.device, port, err)
+		return false
+	}
+	conn.SetReadDeadline(time.Now().Add(timeout))
+	buf := make([]byte, 4096)
+	for {
+		n, err := conn.Read(buf)
+		if err != nil {
+			log.Printf("udp   <- %s:%d  (no reply: %v)", s.device, port, err)
+			return false
+		}
+		log.Printf("udp   <- %s:%d  %q", s.device, port, string(buf[:n]))
+		return true
+	}
+}
+
+// wakeDevice probes the wake port to bring the device up. The reply content is
+// irrelevant; we only need to knock on the port and move on.
+func (s *Sender) wakeDevice() bool {
+	ok := s.probePort(s.wakePort, []byte("123"), 2*time.Second)
+	if !ok {
+		log.Printf("wake %s:%d: no reply (device may already be awake)", s.device, s.wakePort)
+	}
+	return ok
+}
+
+// Connect performs the two-phase connection sequence: first wake the device on
+// the wake port, then verify the command port answers with "format failed".
+// On success it opens the persistent command connection.
 func (s *Sender) Connect() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -91,45 +166,13 @@ func (s *Sender) Connect() bool {
 	}
 	s.status = "connecting"
 
-	addr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", s.device, s.port))
-	if err != nil {
-		log.Printf("connect: resolve %s:%d: %v", s.device, s.port, err)
-		s.status = "disconnected"
-		return false
-	}
+	// Phase 1: wake the device on the wake port.
+	s.wakeDevice()
+	// Give the device a moment to bring up the command channel.
+	time.Sleep(200 * time.Millisecond)
 
-	probe, err := net.DialUDP("udp", nil, addr)
-	if err != nil {
-		log.Printf("connect: open probe udp: %v", err)
-		s.status = "disconnected"
-		return false
-	}
-	defer probe.Close()
-
-	log.Printf("udp  -> %s:%d  \"123\"", s.device, s.port)
-	if _, err := probe.Write([]byte("123")); err != nil {
-		log.Printf("connect: write probe: %v", err)
-		s.status = "disconnected"
-		return false
-	}
-	probe.SetReadDeadline(time.Now().Add(3 * time.Second))
-	buf := make([]byte, 4096)
-	ok := false
-	for {
-		n, err := probe.Read(buf)
-		if err != nil {
-			log.Printf("udp   <- %s:%d  (no reply: %v)", s.device, s.port, err)
-			break
-		}
-		resp := string(buf[:n])
-		log.Printf("udp   <- %s:%d  %q", s.device, s.port, resp)
-		if strings.Contains(resp, "format failed") {
-			ok = true
-			break
-		}
-	}
-
-	if !ok {
+	// Phase 2: verify the command port answers with "format failed".
+	if !s.probePort(s.commandPort, []byte("123"), 3*time.Second) {
 		s.status = "disconnected"
 		return false
 	}
@@ -147,7 +190,7 @@ func (s *Sender) openConnUnlocked() error {
 	if s.conn != nil {
 		return nil
 	}
-	addr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", s.device, s.port))
+	addr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", s.device, s.commandPort))
 	if err != nil {
 		return err
 	}
@@ -162,7 +205,8 @@ func (s *Sender) openConnUnlocked() error {
 }
 
 // startReader launches a background goroutine that logs every datagram the
-// device sends back. It runs until the connection is closed.
+// device sends back. It runs until the connection is closed or errors out; on
+// error it tears down the socket so the next Send reconnects cleanly.
 func (s *Sender) startReader() {
 	done := make(chan struct{})
 	s.readerDone = done
@@ -172,36 +216,46 @@ func (s *Sender) startReader() {
 		for {
 			n, err := s.conn.Read(buf)
 			if err != nil {
-				// A closed socket (Disconnect/SetTarget) is expected; any other
-				// error is surfaced for debugging.
 				var ne net.Error
 				if errors.As(err, &ne) && ne.Timeout() {
-					log.Printf("udp reader %s:%d: timeout", s.device, s.port)
-					return
+					log.Printf("udp reader %s:%d: timeout", s.device, s.commandPort)
+				} else if !strings.Contains(err.Error(), "closed") {
+					log.Printf("udp reader %s:%d: %v", s.device, s.commandPort, err)
 				}
-				if strings.Contains(err.Error(), "closed") {
-					return
+				// Tear down the socket so a subsequent Send reconnects rather
+				// than writing into a dead connection.
+				s.mu.Lock()
+				if s.conn != nil {
+					s.conn.Close()
+					s.conn = nil
 				}
-				log.Printf("udp reader %s:%d: %v", s.device, s.port, err)
+				s.status = "disconnected"
+				s.mu.Unlock()
 				return
 			}
-			resp := string(buf[:n])
-			log.Printf("udp   <- %s:%d  %q", s.device, s.port, resp)
+			log.Printf("udp   <- %s:%d  %q", s.device, s.commandPort, string(buf[:n]))
 		}
 	}()
 }
 
 // Send wraps cmd in the wget callback payload and sends it as one UDP datagram.
+// If there is no active command connection, it first wakes the device on the
+// wake port, then opens the command connection.
 func (s *Sender) Send(cmd string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.openConnUnlocked(); err != nil {
-		log.Printf("send: open udp %s:%d: %v", s.device, s.port, err)
-		s.status = "disconnected"
-		return err
+	if s.conn == nil {
+		// No active connection: wake the device, then open the command channel.
+		s.wakeDevice()
+		time.Sleep(200 * time.Millisecond)
+		if err := s.openConnUnlocked(); err != nil {
+			log.Printf("send: open udp %s:%d: %v", s.device, s.commandPort, err)
+			s.status = "disconnected"
+			return err
+		}
 	}
 	payload := buildPayload(cmd, s.advertise)
-	log.Printf("udp  -> %s:%d  %s", s.device, s.port, payload)
+	log.Printf("udp  -> %s:%d  %s", s.device, s.commandPort, payload)
 	if _, err := s.conn.Write([]byte(payload)); err != nil {
 		log.Printf("send: write: %v", err)
 		s.status = "disconnected"

@@ -11,13 +11,12 @@ import (
 	"strings"
 )
 
-//go:embed web/*.html web/*.js web/*.css
+//go:embed web/*.html
 var webFS embed.FS
 
 func main() {
 	listen := flag.String("listen", ":7777", "HTTP listen address")
 	device := flag.String("device", "10.4.1.180", "target device IP")
-	port := flag.Int("port", 7329, "command UDP port on the device")
 	advertise := flag.String("advertise", "", "host:port the device can reach for the wget callback (default: auto-detect LAN IP + listen port)")
 	flag.Parse()
 
@@ -35,7 +34,7 @@ func main() {
 		adv = fmt.Sprintf("%s:%s", ip, listenPort)
 	}
 
-	sender := NewSender(*device, *port, adv)
+	sender := NewSender(*device, adv)
 	term := NewTerminal()
 	hub := newHub()
 
@@ -65,7 +64,7 @@ func main() {
 		}
 	})
 
-	log.Printf("tenda-web-shell listening on %s (device %s:%d, advertise %s)", *listen, *device, *port, adv)
+	log.Printf("tenda-web-shell listening on %s (device %s, wake port %d, command port %d, advertise %s)", *listen, *device, wakePort, commandPort, adv)
 	if err := http.ListenAndServe(*listen, loggingMiddleware(mux)); err != nil {
 		log.Fatal(err)
 	}
@@ -84,10 +83,6 @@ func serveStatic(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case strings.HasSuffix(path, ".html"):
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	case strings.HasSuffix(path, ".js"):
-		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
-	case strings.HasSuffix(path, ".css"):
-		w.Header().Set("Content-Type", "text/css; charset=utf-8")
 	default:
 		w.Header().Set("Content-Type", "application/octet-stream")
 	}
