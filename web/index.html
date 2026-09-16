@@ -28,6 +28,11 @@
   }
   #connbtn:hover { background:#34495e; }
   #connbtn.connected { background:#1e6b3a; }
+  #clearbtn {
+    background:#3a2c2c; color:#fff; border:1px solid #444; border-radius:3px;
+    padding:4px 12px; font:13px monospace; cursor:pointer;
+  }
+  #clearbtn:hover { background:#4d3535; }
 
   /* Full-viewport layer below the toolbar; centers the terminal window. */
   #termwrap {
@@ -77,6 +82,7 @@
   <span id="status">connecting…</span>
   <input id="target" type="text" placeholder="device:port (e.g. 10.4.1.180:7329)" spellcheck="false">
   <button id="connbtn">Connect</button>
+  <button id="clearbtn" title="Clear terminal history">Clear</button>
 </div>
 <div id="termwrap">
   <div id="termwin">
@@ -109,6 +115,7 @@
   var statusEl = document.getElementById("status");
   var targetInput = document.getElementById("target");
   var connBtn = document.getElementById("connbtn");
+  var clearBtn = document.getElementById("clearbtn");
   var lastTarget = ""; // address currently applied on the server
 
   function setStatus(s) {
@@ -144,6 +151,10 @@
 
   targetInput.addEventListener("keydown", function (e) {
     if (e.key === "Enter") connBtn.click();
+  });
+
+  clearBtn.addEventListener("click", function () {
+    sendMsg({ type: "clear" });
   });
 
   function wsURL() {
@@ -328,6 +339,12 @@
         case "target":
           targetInput.value = m.data;
           lastTarget = m.data;
+          break;
+        case "clear":
+          term.clear();
+          inputLine = "";
+          term.write("$ ");
+          term.scrollToBottom();
           break;
       }
     };

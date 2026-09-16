@@ -59,6 +59,13 @@ func (t *Terminal) Append(line string) {
 	t.mu.Unlock()
 }
 
+// Clear wipes the stored history so new clients join with an empty terminal.
+func (t *Terminal) Clear() {
+	t.mu.Lock()
+	t.lines = nil
+	t.mu.Unlock()
+}
+
 // History returns a copy of all stored lines.
 func (t *Terminal) History() []string {
 	t.mu.Lock()

@@ -135,6 +135,9 @@ func handleWS(term *Terminal, sender *Sender, h *hub) http.HandlerFunc {
 				case "disconnect":
 					sender.Disconnect()
 					h.broadcast(wsMessage{Type: "status", Data: sender.Status()})
+				case "clear":
+					term.Clear()
+					h.broadcast(wsMessage{Type: "clear"})
 				case "settarget":
 					// data is "host:port"
 					host, portStr, err := net.SplitHostPort(msg.Data)
