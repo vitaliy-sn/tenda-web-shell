@@ -16,7 +16,6 @@ var webFS embed.FS
 
 func main() {
 	listen := flag.String("listen", ":7777", "HTTP listen address")
-	device := flag.String("device", "10.4.1.180", "target device IP")
 	advertise := flag.String("advertise", "", "host:port the device can reach for the wget callback (default: auto-detect LAN IP + listen port)")
 	flag.Parse()
 
@@ -34,7 +33,7 @@ func main() {
 		adv = fmt.Sprintf("%s:%s", ip, listenPort)
 	}
 
-	sender := NewSender(*device, adv)
+	sender := NewSender("", adv) // target IP is set via the web UI (settarget)
 	term := NewTerminal()
 	hub := newHub()
 
@@ -64,7 +63,7 @@ func main() {
 		}
 	})
 
-	log.Printf("tenda-web-shell listening on %s (device %s, wake port %d, command port %d, advertise %s)", *listen, *device, wakePort, commandPort, adv)
+	log.Printf("tenda-web-shell listening on %s (wake port %d, command port %d, advertise %s; set target IP in the web UI)", *listen, wakePort, commandPort, adv)
 	if err := http.ListenAndServe(*listen, loggingMiddleware(mux)); err != nil {
 		log.Fatal(err)
 	}

@@ -164,6 +164,11 @@ func (s *Sender) Connect() bool {
 	if s.conn != nil {
 		return s.status == "connected"
 	}
+	if s.device == "" {
+		log.Printf("connect: no target device set")
+		s.status = "disconnected"
+		return false
+	}
 	s.status = "connecting"
 
 	// Phase 1: wake the device on the wake port.
@@ -244,6 +249,9 @@ func (s *Sender) startReader() {
 func (s *Sender) Send(cmd string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.device == "" {
+		return errors.New("no target device set")
+	}
 	if s.conn == nil {
 		// No active connection: wake the device, then open the command channel.
 		s.wakeDevice()

@@ -21,6 +21,8 @@
     padding:3px 6px; font:13px monospace; width:160px; margin-left:auto;
   }
   #target:focus { outline:none; border-color:#2ecc71; }
+  #target::placeholder { color:#555; }
+  #target:focus::placeholder { color:transparent; }
   #connbtn {
     background:#2c3e50; color:#fff; border:1px solid #444; border-radius:3px;
     padding:4px 12px; font:13px monospace; cursor:pointer;
@@ -99,7 +101,7 @@
   <span class="title">tenda-web-shell</span>
   <span id="dot"></span>
   <span id="status">connecting&hellip;</span>
-  <input id="target" type="text" placeholder="device IP (e.g. 10.4.1.180)" spellcheck="false">
+  <input id="target" type="text" placeholder="10.4.1.180" spellcheck="false">
   <button id="connbtn">Connect</button>
   <button id="clearbtn" title="Clear terminal history">Clear</button>
 </div>
@@ -152,6 +154,10 @@
 
   connBtn.addEventListener("click", function () {
     var val = targetInput.value.trim();
+    if (val === "") {
+      // Use the placeholder as the default target when the field is empty.
+      val = targetInput.placeholder.trim();
+    }
     if (val && val !== lastTarget) {
       sendMsg({ type: "settarget", data: val });
       lastTarget = val;
