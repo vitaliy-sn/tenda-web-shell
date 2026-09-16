@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tenda Web Shell</title>
+<link rel="stylesheet" href="/xterm.css">
+<style>
+  html, body { margin:0; padding:0; height:100%; background:#111; }
+  #bar {
+    display:flex; align-items:center; gap:10px;
+    height:34px; padding:0 12px; box-sizing:border-box;
+    background:#1e1e1e; color:#ccc; font:13px/1 monospace;
+    border-bottom:1px solid #333; user-select:none;
+  }
+  #bar .title { font-weight:bold; color:#fff; }
+  #dot { width:10px; height:10px; border-radius:50%; background:#e74c3c; display:inline-block; }
+  #dot.on { background:#2ecc71; }
+  #status { color:#888; }
+  #target {
+    background:#111; color:#ddd; border:1px solid #444; border-radius:3px;
+    padding:3px 6px; font:13px monospace; width:200px; margin-left:auto;
+  }
+  #target:focus { outline:none; border-color:#2ecc71; }
+  #connbtn {
+    background:#2c3e50; color:#fff; border:1px solid #444; border-radius:3px;
+    padding:4px 12px; font:13px monospace; cursor:pointer;
+  }
+  #connbtn:hover { background:#34495e; }
+  #connbtn.connected { background:#1e6b3a; }
+  #termwrap { position:absolute; top:34px; left:0; right:0; bottom:0; padding:6px; }
+  #term { height:100%; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <span class="title">tenda-web-shell</span>
+  <span id="dot"></span>
+  <span id="status">connecting…</span>
+  <input id="target" type="text" placeholder="device:port (e.g. 10.4.1.180:7329)" spellcheck="false">
+  <button id="connbtn">Connect</button>
+</div>
+<div id="termwrap"><div id="term"></div></div>
+
+<script src="/xterm.js"></script>
+<script>
+(function () {
+  var term = new Terminal({
+    cursorBlink: true,
+    fontSize: 14,
+    fontFamily: "Menlo, Consolas, 'DejaVu Sans Mono', monospace",
+    theme: { background: "#111", foreground: "#ddd", cursor: "#2ecc71" }
+  });
+  term.open(document.getElementById("term"));
+
+  var dot = document.getElementById("dot");
+  var statusEl = document.getElementById("status");
+  var lastTarget = ""; // tracks the address currently applied on the server
+
+  var targetInput = document.getElementById("target");
+  var connBtn = document.getElementById("connbtn");
+
+  function setStatus(s) {
+    if (s === "connected") {
+      dot.classList.add("on"); statusEl.textContent = "connected";
+      connBtn.textContent = "Disconnect"; connBtn.classList.add("connected");
+    } else if (s === "connecting") {
+      dot.classList.remove("on"); statusEl.textContent = "connecting…";
+      connBtn.textContent = "Connect"; connBtn.classList.remove("connected");
+    } else {
+      dot.classList.remove("on"); statusEl.textContent = "disconnected";
+      connBtn.textContent = "Connect"; connBtn.classList.remove("connected");
+    }
+  }
+
+  function sendMsg(m) {
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(m));
+  }
+
+  connBtn.addEventListener("click", function () {
+    var val = targetInput.value.trim();
+    // If the user typed a new address, apply it first.
+    if (val && val !== lastTarget) {
+      sendMsg({ type: "settarget", data: val });
+      lastTarget = val;
+    }
+    if (connBtn.textContent === "Disconnect") {
+      sendMsg({ type: "disconnect" });
+    } else {
+      setStatus("connecting");
+      sendMsg({ type: "connect" });
+    }
+  });
+
+  // Allow applying a new address by pressing Enter in the input.
+  targetInput.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") { connBtn.click(); }
+  });
+
+  function wsURL() {
+    var proto = location.protocol === "https:" ? "wss" : "ws";
+    return proto + "://" + location.host + "/ws";
+  }
+
+  var ws;
+  function connect() {
+    ws = new WebSocket(wsURL());
+    ws.onopen = function () { setStatus("connecting"); };
+    ws.onmessage = function (ev) {
+      var m;
+      try { m = JSON.parse(ev.data); } catch (e) { return; }
+      if (m.type === "out") { term.write(m.data + "\r\n"); term.scrollToBottom(); }
+      else if (m.type === "prompt") { term.write("\r\n$ "); term.scrollToBottom(); }
+      else if (m.type === "status") { setStatus(m.data); }
+      else if (m.type === "target") { targetInput.value = m.data; lastTarget = m.data; }
+    };
+    ws.onclose = function () {
+      setStatus("disconnected");
+      setTimeout(connect, 1500);
+    };
+    ws.onerror = function () { try { ws.close(); } catch (e) {} };
+  }
+
+  // Line input. In xterm.js 5.x, onData fires from the keypress event for
+  // printable characters only — Enter/Backspace never reach it. So we capture
+  // those via customKeyEventHandler (real DOM keydown events) and accumulate
+  // typed characters in onData. The server adds the newline + next prompt, so
+  // output starts on a fresh line.
+  var inputLine = "";
+
+  function sendCmd() {
+    var cmd = inputLine;
+    inputLine = "";
+    if (cmd && ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "cmd", data: cmd }));
+    }
+  }
+
+  term.onData(function (data) {
+    // Printable characters accumulate into the current line. Backspace and
+    // Ctrl-C are handled in customKeyEventHandler below.
+    if (data.length === 1 && data >= " ") inputLine += data;
+  });
+
+  term.options.customKeyEventHandler = function (ev) {
+    if (ev.type !== "keydown") return;
+    if (ev.key === "Enter") { sendCmd(); return false; }
+    if (ev.key === "Backspace") {
+      if (inputLine.length > 0) inputLine = inputLine.slice(0, -1);
+      return false;
+    }
+    if (ev.ctrlKey && ev.key.toLowerCase() === "c") { inputLine = ""; return false; }
+  };
+
+  connect();
+})();
+</script>
+</body>
+</html>
