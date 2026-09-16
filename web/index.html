@@ -6,7 +6,7 @@
 <title>Tenda Web Shell</title>
 <link rel="stylesheet" href="/xterm.css">
 <style>
-  html, body { margin:0; padding:0; height:100%; background:#111; }
+  html, body { margin:0; padding:0; height:100%; background:#111; overflow:hidden; }
   #bar {
     display:flex; align-items:center; gap:10px;
     height:34px; padding:0 12px; box-sizing:border-box;
@@ -28,8 +28,46 @@
   }
   #connbtn:hover { background:#34495e; }
   #connbtn.connected { background:#1e6b3a; }
-  #termwrap { position:absolute; top:34px; left:0; right:0; bottom:0; padding:6px; }
-  #term { height:100%; }
+
+  /* Full-viewport layer below the toolbar; centers the terminal window. */
+  #termwrap {
+    position:absolute; top:34px; left:0; right:0; bottom:0;
+    display:flex; align-items:center; justify-content:center;
+  }
+
+  /* The draggable/resizable "window" around xterm. Starts centered via the
+     flex above; after the first drag/resize it switches to position:absolute
+     with explicit left/top so it no longer fights the flex centering. */
+  #termwin {
+    width:900px; height:520px; min-width:340px; min-height:170px;
+    background:#111; border:1px solid #3a3a3a; border-radius:6px;
+    box-shadow:0 8px 30px rgba(0,0,0,.55);
+    display:flex; flex-direction:column; overflow:hidden;
+  }
+  #termwin.moved { position:absolute; margin:0; }
+
+  /* Title bar = drag handle. */
+  #termtitle {
+    height:28px; flex:0 0 28px; padding:0 10px; box-sizing:border-box;
+    display:flex; align-items:center;
+    background:#1e1e1e; color:#bbb; font:12px/1 monospace;
+    border-bottom:1px solid #333; cursor:move; user-select:none;
+  }
+  #termtitle .grip { margin-right:8px; color:#555; letter-spacing:1px; }
+
+  /* xterm fills the window below the title bar. */
+  #term { flex:1 1 auto; min-height:0; padding:4px 6px; }
+
+  /* Bottom-right resize grip. */
+  #resizehandle {
+    position:absolute; right:0; bottom:0; width:18px; height:18px;
+    cursor:nwse-resize; user-select:none; z-index:2;
+  }
+  #resizehandle::after {
+    content:""; position:absolute; right:4px; bottom:4px;
+    width:8px; height:8px;
+    border-right:2px solid #555; border-bottom:2px solid #555;
+  }
 </style>
 </head>
 <body>
@@ -40,12 +78,23 @@
   <input id="target" type="text" placeholder="device:port (e.g. 10.4.1.180:7329)" spellcheck="false">
   <button id="connbtn">Connect</button>
 </div>
-<div id="termwrap"><div id="term"></div></div>
+<div id="termwrap">
+  <div id="termwin">
+    <div id="termtitle"><span class="grip">&#9635;</span>tenda-web-shell</div>
+    <div id="term"></div>
+    <div id="resizehandle"></div>
+  </div>
+</div>
 
 <script src="/xterm.js"></script>
 <script>
 (function () {
   "use strict";
+
+  var termwrap = document.getElementById("termwrap");
+  var win = document.getElementById("termwin");
+  var titleBar = document.getElementById("termtitle");
+  var resizeHandle = document.getElementById("resizehandle");
 
   var term = new Terminal({
     cursorBlink: true,
@@ -123,8 +172,6 @@
   }
 
   term.onData(function (data) {
-    // Accumulate printable characters only. Control chars (\r, \x7f, etc.)
-    // are handled by the custom key handler below.
     for (var i = 0; i < data.length; i++) {
       var ch = data[i];
       if (ch >= " ") inputLine += ch;
@@ -154,6 +201,109 @@
     }
     return undefined; // default handling -> onData for printable chars
   });
+
+  // ---- Fit xterm to the window -----------------------------------------
+  // No external addon: measure the #term box and the font cell, then call
+  // term.resize(cols, rows). Works on any xterm 5.x.
+  var charMeasure = null;
+  function measureChar() {
+    if (charMeasure) return charMeasure;
+    var canvas = document.createElement("canvas");
+    var ctx = canvas.getContext("2d");
+    ctx.font = term._core ? "14px Menlo, Consolas, monospace" : "14px monospace";
+    // Use xterm's own measurement when available for accuracy.
+    var core = term._core;
+    if (core && core._charSizeService) {
+      try {
+        var cs = core._charSizeService.getCharSize();
+        if (cs && cs.width > 0) { charMeasure = cs; return cs; }
+      } catch (e) {}
+    }
+    var m = ctx.measureText("W");
+    charMeasure = { width: Math.max(1, m.width), height: 14 };
+    return charMeasure;
+  }
+
+  function fit() {
+    var box = document.getElementById("term").getBoundingClientRect();
+    if (box.width < 20 || box.height < 20) return;
+    var cs = measureChar();
+    // Account for #term padding (4px top/bottom, 6px left/right).
+    var availW = box.width - 12;
+    var availH = box.height - 8;
+    var cols = Math.max(2, Math.floor(availW / cs.width));
+    var rows = Math.max(1, Math.floor(availH / (cs.height || 14)));
+    if (cols !== term.cols || rows !== term.rows) {
+      term.resize(cols, rows);
+    }
+  }
+
+  // ---- Window drag + resize --------------------------------------------
+  function centerWindow() {
+    var wrapRect = termwrap.getBoundingClientRect();
+    var w = win.offsetWidth, h = win.offsetHeight;
+    var left = Math.max(0, (wrapRect.width - w) / 2);
+    var top = Math.max(0, (wrapRect.height - h) / 2);
+    win.classList.add("moved");
+    win.style.left = left + "px";
+    win.style.top = top + "px";
+  }
+
+  function startDrag(e) {
+    e.preventDefault();
+    var wrapRect = termwrap.getBoundingClientRect();
+    var winRect = win.getBoundingClientRect();
+    var offX = e.clientX - winRect.left;
+    var offY = e.clientY - winRect.top;
+    win.classList.add("moved");
+
+    function onMove(ev) {
+      var x = ev.clientX - offX;
+      var y = ev.clientY - offY;
+      // Clamp so the window stays inside the wrap area.
+      var maxX = Math.max(0, wrapRect.width - win.offsetWidth);
+      var maxY = Math.max(0, wrapRect.height - win.offsetHeight);
+      x = Math.min(Math.max(0, x), maxX);
+      y = Math.min(Math.max(0, y), maxY);
+      win.style.left = x + "px";
+      win.style.top = y + "px";
+    }
+    function onUp() {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    }
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }
+
+  function startResize(e) {
+    e.preventDefault();
+    var startW = win.offsetWidth;
+    var startH = win.offsetHeight;
+    var startX = e.clientX;
+    var startY = e.clientY;
+
+    function onMove(ev) {
+      var w = Math.max(340, startW + (ev.clientX - startX));
+      var h = Math.max(170, startH + (ev.clientY - startY));
+      win.style.width = w + "px";
+      win.style.height = h + "px";
+      fit();
+    }
+    function onUp() {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      fit();
+    }
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }
+
+  titleBar.addEventListener("mousedown", startDrag);
+  resizeHandle.addEventListener("mousedown", startResize);
+
+  // Keep xterm fitted when the browser window resizes.
+  window.addEventListener("resize", fit);
 
   // ---- WebSocket --------------------------------------------------------
   var ws;
@@ -188,6 +338,9 @@
     ws.onerror = function () { try { ws.close(); } catch (e) {} };
   }
 
+  // Initial layout: center the window, then fit xterm to it.
+  centerWindow();
+  fit();
   connect();
 })();
 </script>
