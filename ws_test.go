@@ -44,11 +44,14 @@ func TestWSBridge(t *testing.T) {
 	readMsg(t, "target")
 	readMsg(t, "status")
 
-	// Send a command; the server no longer injects a newline/prompt into the
-	// terminal buffer (the browser echoes the command itself), so only the
-	// status update follows.
+	// Send a command; the server stores it in history and broadcasts it back as
+	// an "out" line before the status update.
 	if err := conn.WriteJSON(wsMessage{Type: "cmd", Data: "ls -l /etc"}); err != nil {
 		t.Fatalf("write cmd: %v", err)
+	}
+	cmdEcho := readMsg(t, "out")
+	if cmdEcho.Data != "$ ls -l /etc" {
+		t.Fatalf("want command echo %q got %q", "$ ls -l /etc", cmdEcho.Data)
 	}
 	readMsg(t, "status")
 

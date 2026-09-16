@@ -179,28 +179,33 @@
     return output.scrollHeight - output.scrollTop - output.clientHeight < 40;
   }
 
-  function appendLine(text, cls) {
+  // Lines starting with "$ " are commands (stored server-side with the prompt
+  // prefix); everything else is device output. This keeps commands green both
+  // live and after a page refresh (replayed history). The text may contain
+  // multiple lines (history replay arrives as one blob), so each line is
+  // classified individually.
+  function appendLine(text) {
     var wasNear = nearBottom();
-    var div = document.createElement("div");
-    div.className = cls || "out-line";
-    div.textContent = text;
-    output.appendChild(div);
+    var lines = text.split("\n");
+    for (var i = 0; i < lines.length; i++) {
+      var div = document.createElement("div");
+      div.className = lines[i].indexOf("$ ") === 0 ? "cmd-line" : "out-line";
+      div.textContent = lines[i];
+      output.appendChild(div);
+    }
     if (wasNear) output.scrollTop = output.scrollHeight;
-  }
-
-  function appendCmd(cmd) {
-    appendLine("$ " + cmd, "cmd-line");
   }
 
   // ---- Command input -----------------------------------------------------
   // Native <input> handles all editing (backspace, arrows, selection, paste).
-  // On Enter: echo the command into the output pane, clear the field, send it.
+  // On Enter: clear the field and send the command. The server stores it in
+  // history and echoes it back over WS, so no local echo is needed (and would
+  // duplicate the line).
   cmdInput.addEventListener("keydown", function (e) {
     if (e.key !== "Enter") return;
     var cmd = cmdInput.value;
     cmdInput.value = "";
     if (cmd === "") return;
-    appendCmd(cmd);
     sendMsg({ type: "cmd", data: cmd });
   });
 
@@ -276,7 +281,7 @@
       try { m = JSON.parse(ev.data); } catch (e) { return; }
       switch (m.type) {
         case "out":
-          appendLine(m.data, "out-line");
+          appendLine(m.data);
           break;
         case "status":
           setStatus(m.data);

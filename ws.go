@@ -112,8 +112,9 @@ func handleWS(term *Terminal, sender *Sender, h *hub) http.HandlerFunc {
 					if cmd == "" {
 						continue
 					}
-					// The browser echoes the command into its output pane; we
-					// just dispatch it to the device and report status.
+					// Store the command in history (with prompt prefix) so it is
+					// replayed on reconnect/refresh and visible to all clients.
+					term.Append("$ " + cmd)
 					if err := sender.Send(cmd); err != nil {
 						term.Append("[send error: " + err.Error() + "]")
 					}

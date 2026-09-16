@@ -151,13 +151,20 @@ func TestConnectCommandAndResponse(t *testing.T) {
 	}
 	t.Logf("connected to device (probe OK)")
 
-	// Send the command. The server no longer injects a newline/prompt into the
-	// terminal buffer (the browser echoes the command itself); only the status
-	// update follows, then the device's callback POST delivers the output.
+	// Send the command. The server stores it in history and broadcasts it back
+	// as an "out" line ("$ ls /etc/passwd"), then reports status, then the
+	// device's callback POST delivers the actual output.
 	if err := conn.WriteJSON(wsMessage{Type: "cmd", Data: "ls /etc/passwd"}); err != nil {
 		t.Fatalf("write cmd: %v", err)
 	}
 	t.Logf("WS -> cmd \"ls /etc/passwd\"")
+
+	// The stored command is echoed back first.
+	cmdEcho := read("out")
+	if cmdEcho.Data != "$ ls /etc/passwd" {
+		t.Fatalf("want command echo %q got %q", "$ ls /etc/passwd", cmdEcho.Data)
+	}
+
 	read("status")
 
 	// The fake device POSTs the command output back; the server appends it to

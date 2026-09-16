@@ -46,8 +46,8 @@ func (t *Terminal) Unsubscribe(ch <-chan string) {
 func (t *Terminal) Append(line string) {
 	t.mu.Lock()
 	t.lines = append(t.lines, line)
-	if len(t.lines) > 10000 {
-		t.lines = t.lines[len(t.lines)-10000:]
+	if len(t.lines) > 99999 {
+		t.lines = t.lines[len(t.lines)-99999:]
 	}
 	for ch := range t.sub {
 		select {
