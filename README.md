@@ -5,8 +5,8 @@ Web shell with root access for Tenda IP cameras.
 Based on the PoC from [Tenda-Smart-Camera-Vulnerability](https://github.com/howitouchyou/Tenda-Smart-Camera-Vulnerability).
 
 Tested on:
-- Tenda CH7-WCA V2.0 — https://www.tendacn.com/in/product/overview/CH7-WCAV2
-- Tenda CP7 V2.0 — https://www.tendacn.com/in/product/overview/CP7V20
+- Tenda CH7-WCA V2.0 (firmware V25.4.29.93) — https://www.tendacn.com/in/product/overview/CH7-WCAV2
+- Tenda CP7 V2.0 (firmware V21.7.17.28) — https://www.tendacn.com/in/product/overview/CP7V20
 
 ## Screenshots
 
