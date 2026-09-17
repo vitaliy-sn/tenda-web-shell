@@ -8,6 +8,12 @@ Tested on:
 - Tenda CH7-WCA V2.0 — https://www.tendacn.com/in/product/overview/CH7-WCAV2
 - Tenda CP7 V2.0 — https://www.tendacn.com/in/product/overview/CP7V20
 
+## Screenshots
+
+| Disconnected | Connected |
+|---|---|
+| ![Disconnected](screenshots/ui-disconnected.png) | ![Connected](screenshots/ui-connected.png) |
+
 ## How it works
 
 The server connects to the camera over UDP in two phases: first a wake packet on port 7320, then a command channel on port 7329. Each command is injected via the `PTEfuseSet` method so the camera executes it as root and POSTs the output back to the server with `wget`.
