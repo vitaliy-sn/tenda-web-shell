@@ -1,0 +1,6 @@
+services:
+  tendashell:
+    image: ixdx/tendashell:latest
+    container_name: tendashell
+    network_mode: host
+    restart: unless-stopped
