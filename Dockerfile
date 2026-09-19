@@ -7,6 +7,6 @@ COPY . .
 RUN go build -o tendashell .
 
 
-FROM debian:bookworm
+FROM debian:trixie
 COPY --from=builder /app/tendashell /app/tendashell
 CMD ["/app/tendashell"]
