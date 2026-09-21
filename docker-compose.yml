@@ -1,6 +1,8 @@
 services:
   tendashell:
-    image: ixdx/tendashell:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: tendashell
     network_mode: host
     restart: unless-stopped
